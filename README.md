@@ -1,13 +1,17 @@
 # Review PR Script
 
-A TypeScript script that automatically reviews GitHub pull requests in a specific repository. It can filter PRs by team or user assignments and auto-approve simple/small PRs while providing URLs for complex ones that need manual review.
+A TypeScript script that helps you review GitHub pull requests in a specific repository. It filters PRs by team or user assignments and provides an interactive interface to approve, open, skip, or ignore each PR.
 
 ## Features
 
 - 📦 Works with a specific repository (no more searching across all repos)
 - 🔍 Filters PRs by team assignments or specific users
-- ✅ Auto-approves simple/small PRs with a comment
-- 🔗 Provides URLs for complex PRs that need manual review
+- 🎯 Interactive review process - you decide what to do with each PR
+- 🤖 AI-powered review using Gemini for intelligent code analysis
+- ✅ Approve PRs with a single command
+- 🔗 Open PRs in browser for manual review
+- ⏭️ Skip PRs you don't want to review right now
+- 🚫 Ignore PRs you don't want to review at all (permanently hidden from future runs)
 - 🔍 Dry-run mode to preview actions without making changes
 - ⚙️ Configurable criteria for what constitutes a "simple" PR
 - 👥 Support for team-based PR filtering (finance, expenses, etc.)
@@ -29,7 +33,18 @@ A TypeScript script that automatically reviews GitHub pull requests in a specifi
    - Choose "Login with a web browser"
    - Follow the prompts to complete authentication
 
-3. **Install dependencies:**
+3. **Set up AI Review (Optional):**
+   - Get a Gemini API key from https://makersuite.google.com/app/apikey
+   - Copy `.env.example` to `.env`:
+     ```bash
+     cp .env.example .env
+     ```
+   - Add your Gemini API key to `.env`:
+     ```
+     GEMINI_API_KEY=your_gemini_api_key_here
+     ```
+
+4. **Install dependencies:**
    ```bash
    bun install
    ```
@@ -77,10 +92,37 @@ bun run dev -- --repo factorialco/factorial --teams "" --users ""
 - `--dry` - Dry run mode (shows what would be done without making changes)
 - `--teams <teams>` - Comma-separated list of teams to filter by (default: "finance,expenses")
 - `--users <users>` - Comma-separated list of users to filter by
-- `--max-additions <number>` - Maximum additions for auto-approval (default: 50)
-- `--max-deletions <number>` - Maximum deletions for auto-approval (default: 50)
-- `--max-files <number>` - Maximum changed files for auto-approval (default: 5)
-- `--max-lines <number>` - Maximum total lines changed for auto-approval (default: 100)
+- `--max-additions <number>` - Maximum additions for simple PR detection (default: 50)
+- `--max-deletions <number>` - Maximum deletions for simple PR detection (default: 50)
+- `--max-files <number>` - Maximum changed files for simple PR detection (default: 5)
+- `--max-lines <number>` - Maximum total lines changed for simple PR detection (default: 100)
+
+## Ignore List
+
+The script maintains a persistent ignore list in `.ignored-prs.json` file. When you choose to ignore a PR, its ID is saved to this file and the PR will never be shown again in future executions. This helps you focus on PRs that actually need your attention.
+
+To reset the ignore list, simply delete the `.ignored-prs.json` file.
+
+## AI Review
+
+The script includes AI-powered code review using Google's Gemini API. When you choose "AI Review (ai)", the script will:
+
+1. **Fetch PR Details**: Gets the PR title, description, and complete diff
+2. **AI Analysis**: Sends the code to Gemini for intelligent analysis
+3. **Review Decision**: AI determines one of three actions:
+   - **Approve**: Simple changes that are ready to merge
+   - **Approve with Comments**: Good changes with minor improvements needed
+   - **Comment Only**: Changes that need fixes before approval
+4. **Interactive Feedback**: Shows AI comments and asks if you want to post them
+5. **Smart Comments**: AI focuses on bugs, typos, security issues, and code quality
+
+### AI Review Features:
+- Analyzes the complete PR diff for comprehensive review
+- Provides specific file and line number feedback
+- Focuses on actionable improvements rather than style preferences
+- Shows code context for each comment
+- Asks for confirmation before posting comments
+- Falls back gracefully if AI review fails
 
 ## How It Works
 
@@ -94,8 +136,12 @@ bun run dev -- --repo factorialco/factorial --teams "" --users ""
    - Number of changed files
    - Total lines changed
    - Not a draft PR
-4. **Auto-Approval**: For simple PRs, automatically approves with a comment
-5. **Manual Review**: For complex PRs, prints the URL for manual review
+4. **Interactive Review**: For each PR, asks what you want to do:
+   - **Approve (a)**: Approve the PR with a comment
+   - **Open (o)**: Open the PR in your browser for manual review
+   - **Skip (s)**: Skip this PR for now
+   - **Ignore (i)**: Ignore this PR completely (will never be shown again)
+   - **AI Review (ai)**: Use AI to analyze the PR and provide intelligent feedback
 
 ## Example Output
 
@@ -108,34 +154,61 @@ bun run dev -- --repo factorialco/factorial --teams "" --users ""
 👤 Users to filter by: none
 
 Initialized for user: yourusername
+🤖 AI review enabled with Gemini
 🔍 Fetching PRs from repository...
 
-📊 Found 15 open PRs in factorialco/factorial
-✅ PR #123 included: assigned via team finance
-⏭️  PR #124 skipped: no matching assignments
-✅ PR #125 included: directly assigned as reviewer
-⏭️  PR #126 skipped: no matching assignments
-✅ PR #127 included: assigned via team expenses
-🔍 Filtered to 3 PRs matching your criteria
+📝 Loaded 2 ignored PRs from previous sessions
+🚫 Filtered out 2 ignored PRs from previous sessions
+🔍 Found 3 PRs matching your criteria
 
 📋 PR #123: "Fix typo in README" - 2 additions, 0 deletions, 1 files changed (2 total lines)
 🔗 https://github.com/factorialco/factorial/pull/123
-✅ This PR looks simple enough for auto-approval
+✅ This PR looks simple
+What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (ai): ai
+🤖 Running AI review...
+
+🤖 AI Review Result: APPROVE
+✅ AI recommends approval without comments
+💬 Approval message: LGTM! Simple typo fix.
+Approve this PR? (y/n): y
 🔍 [DRY RUN] Would approve this PR
 
 📋 PR #125: "Update dependencies" - 5 additions, 3 deletions, 2 files changed (8 total lines)
 🔗 https://github.com/factorialco/factorial/pull/125
-✅ This PR looks simple enough for auto-approval
+✅ This PR looks simple
+What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (ai): ai
+🤖 Running AI review...
+
+🤖 AI Review Result: APPROVE_WITH_COMMENTS
+✅ AI recommends approval with comments
+💬 Approval message: Good dependency updates!
+
+📝 AI Comments:
+
+📁 File: package.json
+📍 Line: 15
+💬 Comment: Consider pinning the version to avoid breaking changes
+📄 Context:
+  "dependencies": {
+    "react": "^18.2.0",
+    "lodash": "^4.17.21"
+  }
+Post this comment? (y/n): y
+🔍 [DRY RUN] Would post comment
+Approve this PR with comments? (y/n): y
 🔍 [DRY RUN] Would approve this PR
 
 📋 PR #127: "Refactor authentication system" - 150 additions, 80 deletions, 12 files changed (230 total lines)
 🔗 https://github.com/factorialco/factorial/pull/127
-⚠️  This PR needs manual review (too large or complex)
-🔗 Open in browser: https://github.com/factorialco/factorial/pull/127
+⚠️  This PR is large or complex
+What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (ai): i
+🚫 Ignored (will not be shown again)
 
 📊 Summary:
-✅ Auto-approved: 0
-⚠️  Manual review needed: 1
+✅ Approved: 2
+🔗 Opened: 0
+⏭️  Skipped: 0
+🚫 Ignored: 1
 ```
 
 ## Development

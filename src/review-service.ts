@@ -1,6 +1,10 @@
 import { GitHubCLI } from './github-cli';
 import { PRReviewer } from './pr-reviewer';
 import { PullRequest, ReviewCriteria } from './types';
+import { AIReviewService, AIReviewResult, AIComment } from './ai-review-service';
+import * as readline from 'readline';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class ReviewService {
   private githubCLI: GitHubCLI;
@@ -9,6 +13,9 @@ export class ReviewService {
   private repository: string;
   private teamNames: string[];
   private userNames: string[];
+  private ignoredPRs: Set<number>;
+  private ignoreListPath: string;
+  private aiReviewService?: AIReviewService;
 
   constructor(repository: string, teamNames: string[] = [], userNames: string[] = [], criteria?: Partial<ReviewCriteria>) {
     this.githubCLI = new GitHubCLI();
@@ -16,6 +23,18 @@ export class ReviewService {
     this.repository = repository;
     this.teamNames = teamNames;
     this.userNames = userNames;
+    this.ignoredPRs = new Set<number>();
+    this.ignoreListPath = path.join(process.cwd(), '.ignored-prs.json');
+    this.loadIgnoredPRs();
+    
+    // Initialize AI review service if API key is available
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    if (geminiApiKey) {
+      this.aiReviewService = new AIReviewService(geminiApiKey);
+      console.log('🤖 AI review enabled with Gemini');
+    } else {
+      console.log('⚠️  AI review disabled - GEMINI_API_KEY not found');
+    }
   }
 
   async initialize(): Promise<void> {
@@ -39,42 +58,76 @@ export class ReviewService {
     }
 
     let approvedCount = 0;
-    let manualReviewCount = 0;
+    let openedCount = 0;
+    let skippedCount = 0;
+    let ignoredCount = 0;
 
     for (const pr of filteredPRs) {
       console.log(`\n📋 ${this.prReviewer.getPRSummary(pr)}`);
       console.log(`🔗 ${pr.html_url}`);
 
-      if (this.prReviewer.isSimplePR(pr)) {
-        console.log('✅ This PR looks simple enough for auto-approval');
-        
-        if (dryRun) {
-          console.log('🔍 [DRY RUN] Would approve this PR');
-        } else {
-          try {
-            const comment = this.prReviewer.getApprovalComment(pr);
-            await this.githubCLI.approvePullRequest(
-              pr.repository.owner.login,
-              pr.repository.name,
-              pr.number,
-              comment
-            );
-            console.log('✅ Approved!');
-            approvedCount++;
-          } catch (error) {
-            console.error('❌ Failed to approve PR:', error);
-          }
-        }
+      const isSimple = this.prReviewer.isSimplePR(pr);
+      if (isSimple) {
+        console.log('✅ This PR looks simple');
       } else {
-        console.log('⚠️  This PR needs manual review (too large or complex)');
-        console.log(`🔗 Open in browser: ${pr.html_url}`);
-        manualReviewCount++;
+        console.log('⚠️  This PR is large or complex');
+      }
+
+      const action = await this.askUserAction(pr, dryRun);
+      
+      // Handle AI review if requested
+      if (action === 'ai' && this.aiReviewService) {
+        await this.handleAIReview(pr, dryRun);
+        continue;
+      }
+      
+      switch (action) {
+        case 'a':
+          if (dryRun) {
+            console.log('🔍 [DRY RUN] Would approve this PR');
+          } else {
+            try {
+              const comment = this.prReviewer.getApprovalComment(pr);
+              await this.githubCLI.approvePullRequest(
+                pr.repository.owner.login,
+                pr.repository.name,
+                pr.number,
+                comment
+              );
+              console.log('✅ Approved!');
+            } catch (error) {
+              console.error('❌ Failed to approve PR:', error);
+            }
+          }
+          approvedCount++;
+          break;
+        case 'o':
+          console.log(`🔗 Opening ${pr.html_url} in browser...`);
+          if (!dryRun) {
+            const { exec } = require('child_process');
+            exec(`open "${pr.html_url}"`);
+          } else {
+            console.log('🔍 [DRY RUN] Would open browser');
+          }
+          openedCount++;
+          break;
+        case 's':
+          console.log('⏭️  Skipped');
+          skippedCount++;
+          break;
+        case 'i':
+          console.log('🚫 Ignored (will not be shown again)');
+          this.addIgnoredPR(pr.number);
+          ignoredCount++;
+          break;
       }
     }
 
     console.log('\n📊 Summary:');
-    console.log(`✅ Auto-approved: ${approvedCount}`);
-    console.log(`⚠️  Manual review needed: ${manualReviewCount}`);
+    console.log(`✅ Approved: ${approvedCount}`);
+    console.log(`🔗 Opened: ${openedCount}`);
+    console.log(`⏭️  Skipped: ${skippedCount}`);
+    console.log(`🚫 Ignored: ${ignoredCount}`);
   }
 
   private async getPRsByAssignments(owner: string, repo: string): Promise<PullRequest[]> {
@@ -126,7 +179,214 @@ export class ReviewService {
       }
     }
 
-    return allPRs;
+    // Filter out ignored PRs
+    const filteredPRs = allPRs.filter(pr => !this.isPRIgnored(pr.number));
+    
+    if (allPRs.length > filteredPRs.length) {
+      const ignoredCount = allPRs.length - filteredPRs.length;
+      console.log(`🚫 Filtered out ${ignoredCount} ignored PRs from previous sessions`);
+    }
+    
+    return filteredPRs;
+  }
+
+  private loadIgnoredPRs(): void {
+    try {
+      if (fs.existsSync(this.ignoreListPath)) {
+        const data = fs.readFileSync(this.ignoreListPath, 'utf8');
+        const ignoredList = JSON.parse(data);
+        this.ignoredPRs = new Set(ignoredList);
+        console.log(`📝 Loaded ${this.ignoredPRs.size} ignored PRs from previous sessions`);
+      }
+    } catch (error) {
+      console.warn('⚠️  Could not load ignored PRs list:', error);
+      this.ignoredPRs = new Set<number>();
+    }
+  }
+
+  private saveIgnoredPRs(): void {
+    try {
+      const ignoredList = Array.from(this.ignoredPRs);
+      fs.writeFileSync(this.ignoreListPath, JSON.stringify(ignoredList, null, 2));
+    } catch (error) {
+      console.warn('⚠️  Could not save ignored PRs list:', error);
+    }
+  }
+
+  private addIgnoredPR(prNumber: number): void {
+    this.ignoredPRs.add(prNumber);
+    this.saveIgnoredPRs();
+  }
+
+  private isPRIgnored(prNumber: number): boolean {
+    return this.ignoredPRs.has(prNumber);
+  }
+
+  private async askUserAction(pr: PullRequest, dryRun: boolean): Promise<string> {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+    const aiOption = this.aiReviewService ? ', AI Review (A)' : '';
+    const prompt = `What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i)${aiOption}: `;
+      
+      rl.question(prompt, (answer) => {
+        const action = answer.trim();
+        const validActions = ['a', 'o', 's', 'i'];
+        if (this.aiReviewService) {
+          validActions.push('A');
+        }
+        
+        if (validActions.includes(action)) {
+          rl.close();
+          // Convert 'A' to 'ai' for AI review, others to lowercase
+          if (action === 'A') {
+            resolve('ai');
+          } else {
+            resolve(action.toLowerCase());
+          }
+        } else {
+          console.log(`❌ Invalid choice. Please enter ${validActions.join(', ')}.`);
+          rl.close();
+          resolve(this.askUserAction(pr, dryRun));
+        }
+      });
+    });
+  }
+
+  private async handleAIReview(pr: PullRequest, dryRun: boolean): Promise<void> {
+    if (!this.aiReviewService) {
+      console.log('❌ AI review not available');
+      return;
+    }
+
+    console.log('🤖 Running AI review...');
+    
+    try {
+      // Get PR diff
+      const [owner, repo] = this.repository.split('/');
+      const diff = await this.githubCLI.getPullRequestDiff(owner, repo, pr.number);
+      
+      // Run AI review
+      const aiResult = await this.aiReviewService.reviewPR(pr.title, pr.body || '', diff);
+      
+      console.log(`\n🤖 AI Review Result: ${aiResult.action.toUpperCase()}`);
+      
+      if (aiResult.action === 'approve') {
+        console.log('✅ AI recommends approval without comments');
+        if (aiResult.approvalMessage) {
+          console.log(`💬 Approval message: ${aiResult.approvalMessage}`);
+        }
+        
+        const confirm = await this.askYesNo('Approve this PR? (y/n): ');
+        if (confirm) {
+          if (dryRun) {
+            console.log('🔍 [DRY RUN] Would approve this PR');
+          } else {
+            try {
+              const comment = aiResult.approvalMessage || 'LGTM! 👍';
+              await this.githubCLI.approvePullRequest(
+                pr.repository.owner.login,
+                pr.repository.name,
+                pr.number,
+                comment
+              );
+              console.log('✅ Approved!');
+            } catch (error) {
+              console.error('❌ Failed to approve PR:', error);
+            }
+          }
+        }
+      } else if (aiResult.action === 'approve_with_comments') {
+        console.log('✅ AI recommends approval with comments');
+        if (aiResult.approvalMessage) {
+          console.log(`💬 Approval message: ${aiResult.approvalMessage}`);
+        }
+        
+        // Show comments first
+        if (aiResult.comments.length > 0) {
+          console.log('\n📝 AI Comments:');
+          for (const comment of aiResult.comments) {
+            await this.showAndPostComment(pr, comment, dryRun);
+          }
+        }
+        
+        const confirm = await this.askYesNo('Approve this PR with comments? (y/n): ');
+        if (confirm) {
+          if (dryRun) {
+            console.log('🔍 [DRY RUN] Would approve this PR');
+          } else {
+            try {
+              const comment = aiResult.approvalMessage || 'LGTM! 👍';
+              await this.githubCLI.approvePullRequest(
+                pr.repository.owner.login,
+                pr.repository.name,
+                pr.number,
+                comment
+              );
+              console.log('✅ Approved!');
+            } catch (error) {
+              console.error('❌ Failed to approve PR:', error);
+            }
+          }
+        }
+      } else if (aiResult.action === 'comment_only') {
+        console.log('⚠️  AI recommends comments only (no approval)');
+        
+        if (aiResult.comments.length > 0) {
+          console.log('\n📝 AI Comments:');
+          for (const comment of aiResult.comments) {
+            await this.showAndPostComment(pr, comment, dryRun);
+          }
+        } else {
+          console.log('🤔 AI found no specific issues to comment on');
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ AI review failed:', error);
+      console.log('🔄 Falling back to manual review');
+    }
+  }
+
+  private async showAndPostComment(pr: PullRequest, comment: AIComment, dryRun: boolean): Promise<void> {
+    console.log(`\n📁 File: ${comment.path}`);
+    console.log(`📍 Line: ${comment.line}`);
+    console.log(`💬 Comment: ${comment.content}`);
+    console.log(`📄 Context:\n${comment.context}`);
+    
+    const shouldPost = await this.askYesNo('Post this comment? (y/n): ');
+    if (shouldPost) {
+      if (dryRun) {
+        console.log('🔍 [DRY RUN] Would post comment');
+      } else {
+        try {
+          // For now, we'll post as a general comment since GitHub CLI doesn't support line-specific comments easily
+          const fullComment = `**${comment.path}:${comment.line}**\n\n${comment.content}\n\n\`\`\`\n${comment.context}\n\`\`\``;
+          await this.githubCLI.postComment(pr.repository.owner.login, pr.repository.name, pr.number, fullComment);
+          console.log('✅ Comment posted!');
+        } catch (error) {
+          console.error('❌ Failed to post comment:', error);
+        }
+      }
+    }
+  }
+
+  private async askYesNo(question: string): Promise<boolean> {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question(question, (answer) => {
+        const response = answer.toLowerCase().trim();
+        rl.close();
+        resolve(response === 'y' || response === 'yes');
+      });
+    });
   }
 
 }

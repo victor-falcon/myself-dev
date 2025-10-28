@@ -224,4 +224,30 @@ export class GitHubCLI {
       return false;
     }
   }
+
+  async getPullRequestDiff(owner: string, repo: string, prNumber: number): Promise<string> {
+    try {
+      // Use execSync directly for diff since it's not JSON
+      const { execSync } = require('child_process');
+      const diff = execSync(`gh pr diff --repo ${owner}/${repo} ${prNumber}`, { 
+        encoding: 'utf8',
+        stdio: 'pipe'
+      });
+      return diff;
+    } catch (error) {
+      console.error(`❌ Failed to get diff for PR #${prNumber}:`, error);
+      throw error;
+    }
+  }
+
+  async postComment(owner: string, repo: string, prNumber: number, comment: string): Promise<void> {
+    try {
+      // Escape the comment for shell execution
+      const escapedComment = comment.replace(/"/g, '\\"');
+      await this.executeCommand(`gh pr comment ${prNumber} --repo ${owner}/${repo} --body "${escapedComment}"`);
+    } catch (error) {
+      console.error(`❌ Failed to post comment on PR #${prNumber}:`, error);
+      throw error;
+    }
+  }
 }
