@@ -1,0 +1,22 @@
+{
+  "name": "review-pr-script",
+  "version": "1.0.0",
+  "description": "A TypeScript script to automatically review GitHub PRs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "bun run tsc",
+    "start": "bun run dist/index.js",
+    "dev": "bun run src/index.ts",
+    "review": "bun run build && bun run start"
+  },
+  "keywords": ["github", "pr", "review", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}
