@@ -55,7 +55,7 @@ Guidelines:
 - Use "approve_with_comments" for good changes that have minor improvements
 - Use "comment_only" for changes that need fixes before approval
 - Focus on bugs, typos, security issues, performance problems, code quality
-- Write comments in a conversational, human tone using questions and suggestions. Use single, direct, and clear comments
+- Write comments in a human tone. Use single, direct, and clear comments. Keep them conciese, a single phrase or question.
 - Don't comment on style preferences unless they're significant issues
 `;
 
@@ -93,4 +93,3 @@ Guidelines:
     }
   }
 }
-

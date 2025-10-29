@@ -114,7 +114,9 @@ The script includes AI-powered code review using Google's Gemini API. When you c
    - **Approve with Comments**: Good changes with minor improvements needed
    - **Comment Only**: Changes that need fixes before approval
 4. **Interactive Feedback**: Shows AI comments and asks if you want to post them
-5. **Smart Comments**: AI focuses on bugs, typos, security issues, and code quality
+5. **Comment Editing**: Edit AI comments in nvim before posting them
+6. **Approval Editing**: Edit approval messages in nvim before posting them
+7. **Smart Comments**: AI focuses on bugs, typos, security issues, and code quality
 
 ### AI Review Features:
 - Analyzes the complete PR diff for comprehensive review
@@ -122,6 +124,8 @@ The script includes AI-powered code review using Google's Gemini API. When you c
 - Focuses on actionable improvements rather than style preferences
 - Shows code context for each comment
 - Asks for confirmation before posting comments
+- Allows editing comments in nvim before posting
+- Allows editing approval messages in nvim before posting
 - Falls back gracefully if AI review fails
 
 ## How It Works
@@ -164,13 +168,43 @@ Initialized for user: yourusername
 📋 PR #123: "Fix typo in README" - 2 additions, 0 deletions, 1 files changed (2 total lines)
 🔗 https://github.com/factorialco/factorial/pull/123
 ✅ This PR looks simple
+What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (ai): a
+💬 Approval comment: ✅ Approved! Small change: 2 additions, 0 deletions across 1 files.
+What would you like to do? (a)pprove, (e)dit, (s)kip: e
+📝 Opening nvim to edit approval message...
+# Edit this approval comment
+# Lines starting with # are comments and will be ignored
+# The format is:
+# APPROVAL_MESSAGE: Your approval message here
+
+APPROVAL_MESSAGE:
+✅ Approved! Small change: 2 additions, 0 deletions across 1 files.
+
+💬 Edited approval comment: Perfect! This typo fix is exactly what we needed.
+Approve with this edited comment? (y/n): y
+🔍 [DRY RUN] Would approve this PR
+
+📋 PR #125: "Update dependencies" - 5 additions, 3 deletions, 2 files changed (8 total lines)
+🔗 https://github.com/factorialco/factorial/pull/125
+✅ This PR looks simple
 What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (ai): ai
 🤖 Running AI review...
 
 🤖 AI Review Result: APPROVE
 ✅ AI recommends approval without comments
 💬 Approval message: LGTM! Simple typo fix.
-Approve this PR? (y/n): y
+What would you like to do? (a)pprove, (e)dit, (s)kip: e
+📝 Opening nvim to edit approval message...
+# Edit this approval comment
+# Lines starting with # are comments and will be ignored
+# The format is:
+# APPROVAL_MESSAGE: Your approval message here
+
+APPROVAL_MESSAGE:
+LGTM! Simple typo fix.
+
+💬 Edited approval message: Great fix! This typo was causing confusion.
+Approve with this edited message? (y/n): y
 🔍 [DRY RUN] Would approve this PR
 
 📋 PR #125: "Update dependencies" - 5 additions, 3 deletions, 2 files changed (8 total lines)
@@ -193,7 +227,36 @@ What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i), AI Review (
     "react": "^18.2.0",
     "lodash": "^4.17.21"
   }
-Post this comment? (y/n): y
+What would you like to do? (p)ost, (e)dit, (s)kip: e
+📝 Opening nvim to edit comment...
+# Edit this comment
+# Lines starting with # are comments and will be ignored
+# The format is:
+# FILE_PATH:LINE_NUMBER
+# COMMENT_CONTENT
+# CONTEXT
+
+FILE_PATH:package.json
+LINE_NUMBER:15
+
+COMMENT_CONTENT:
+Consider pinning the version to avoid breaking changes
+
+CONTEXT:
+  "dependencies": {
+    "react": "^18.2.0",
+    "lodash": "^4.17.21"
+  }
+
+📁 File: package.json
+📍 Line: 15
+💬 Comment: Consider pinning the version to avoid breaking changes
+📄 Context:
+  "dependencies": {
+    "react": "^18.2.0",
+    "lodash": "^4.17.21"
+  }
+Post this edited comment? (y/n): y
 🔍 [DRY RUN] Would post comment
 Approve this PR with comments? (y/n): y
 🔍 [DRY RUN] Would approve this PR

@@ -5,6 +5,7 @@ import { AIReviewService, AIReviewResult, AIComment } from './ai-review-service'
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 
 export class ReviewService {
   private githubCLI: GitHubCLI;
@@ -83,21 +84,58 @@ export class ReviewService {
       
       switch (action) {
         case 'a':
-          if (dryRun) {
-            console.log('🔍 [DRY RUN] Would approve this PR');
-          } else {
-            try {
-              const comment = this.prReviewer.getApprovalComment(pr);
-              await this.githubCLI.approvePullRequest(
-                pr.repository.owner.login,
-                pr.repository.name,
-                pr.number,
-                comment
-              );
-              console.log('✅ Approved!');
-            } catch (error) {
-              console.error('❌ Failed to approve PR:', error);
+          const approvalComment = this.prReviewer.getApprovalComment(pr);
+          console.log(`💬 Approval comment: ${approvalComment}`);
+          
+          const approvalAction = await this.askApprovalAction();
+          
+          if (approvalAction === 'edit') {
+            const editedApproval = await this.editApprovalCommentInNvim(approvalComment);
+            if (editedApproval) {
+              console.log(`💬 Edited approval comment: ${editedApproval}`);
+              const confirmApproval = await this.askYesNo('Approve with this edited comment? (y/n): ');
+              if (!confirmApproval) {
+                break;
+              }
+              
+              if (dryRun) {
+                console.log('🔍 [DRY RUN] Would approve this PR');
+              } else {
+                try {
+                  await this.githubCLI.approvePullRequest(
+                    pr.repository.owner.login,
+                    pr.repository.name,
+                    pr.number,
+                    editedApproval
+                  );
+                  console.log('✅ Approved!');
+                } catch (error) {
+                  console.error('❌ Failed to approve PR:', error);
+                }
+              }
+            } else {
+              console.log('❌ Approval comment editing cancelled');
+              break;
             }
+          } else if (approvalAction === 'approve') {
+            if (dryRun) {
+              console.log('🔍 [DRY RUN] Would approve this PR');
+            } else {
+              try {
+                await this.githubCLI.approvePullRequest(
+                  pr.repository.owner.login,
+                  pr.repository.name,
+                  pr.number,
+                  approvalComment
+                );
+                console.log('✅ Approved!');
+              } catch (error) {
+                console.error('❌ Failed to approve PR:', error);
+              }
+            }
+          } else {
+            console.log('⏭️  Skipped approval');
+            break;
           }
           approvedCount++;
           break;
@@ -233,19 +271,29 @@ export class ReviewService {
     const prompt = `What do you want to do? Approve (a), Open (o), Skip (s), Ignore (i)${aiOption}: `;
       
       rl.question(prompt, (answer) => {
-        const action = answer.trim();
+        // Clean the input by removing terminal escape sequences and non-printable characters
+        const cleanAnswer = answer
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // Remove ANSI escape sequences
+          .replace(/[^\x20-\x7E]/g, '') // Remove non-printable characters
+          .trim();
+        
+        // Debug: log the original and cleaned input
+        if (answer !== cleanAnswer) {
+          console.log(`🔧 Input cleaned: "${answer}" -> "${cleanAnswer}"`);
+        }
+        
         const validActions = ['a', 'o', 's', 'i'];
         if (this.aiReviewService) {
           validActions.push('A');
         }
         
-        if (validActions.includes(action)) {
+        if (validActions.includes(cleanAnswer)) {
           rl.close();
           // Convert 'A' to 'ai' for AI review, others to lowercase
-          if (action === 'A') {
+          if (cleanAnswer === 'A') {
             resolve('ai');
           } else {
-            resolve(action.toLowerCase());
+            resolve(cleanAnswer.toLowerCase());
           }
         } else {
           console.log(`❌ Invalid choice. Please enter ${validActions.join(', ')}.`);
@@ -276,22 +324,46 @@ export class ReviewService {
       
       if (aiResult.action === 'approve') {
         console.log('✅ AI recommends approval without comments');
-        if (aiResult.approvalMessage) {
-          console.log(`💬 Approval message: ${aiResult.approvalMessage}`);
-        }
+        const approvalMessage = aiResult.approvalMessage || 'LGTM! 👍';
+        console.log(`💬 Approval message: ${approvalMessage}`);
         
-        const confirm = await this.askYesNo('Approve this PR? (y/n): ');
-        if (confirm) {
+        const approvalAction = await this.askApprovalAction();
+        
+        if (approvalAction === 'edit') {
+          const editedApproval = await this.editApprovalCommentInNvim(approvalMessage);
+          if (editedApproval) {
+            console.log(`💬 Edited approval message: ${editedApproval}`);
+            const confirmApproval = await this.askYesNo('Approve with this edited message? (y/n): ');
+            if (confirmApproval) {
+              if (dryRun) {
+                console.log('🔍 [DRY RUN] Would approve this PR');
+              } else {
+                try {
+                  await this.githubCLI.approvePullRequest(
+                    pr.repository.owner.login,
+                    pr.repository.name,
+                    pr.number,
+                    editedApproval
+                  );
+                  console.log('✅ Approved!');
+                } catch (error) {
+                  console.error('❌ Failed to approve PR:', error);
+                }
+              }
+            }
+          } else {
+            console.log('❌ Approval message editing cancelled');
+          }
+        } else if (approvalAction === 'approve') {
           if (dryRun) {
             console.log('🔍 [DRY RUN] Would approve this PR');
           } else {
             try {
-              const comment = aiResult.approvalMessage || 'LGTM! 👍';
               await this.githubCLI.approvePullRequest(
                 pr.repository.owner.login,
                 pr.repository.name,
                 pr.number,
-                comment
+                approvalMessage
               );
               console.log('✅ Approved!');
             } catch (error) {
@@ -313,18 +385,46 @@ export class ReviewService {
           }
         }
         
-        const confirm = await this.askYesNo('Approve this PR with comments? (y/n): ');
-        if (confirm) {
+        const approvalMessage = aiResult.approvalMessage || 'LGTM! 👍';
+        console.log(`💬 Approval message: ${approvalMessage}`);
+        
+        const approvalAction = await this.askApprovalAction();
+        
+        if (approvalAction === 'edit') {
+          const editedApproval = await this.editApprovalCommentInNvim(approvalMessage);
+          if (editedApproval) {
+            console.log(`💬 Edited approval message: ${editedApproval}`);
+            const confirmApproval = await this.askYesNo('Approve with this edited message? (y/n): ');
+            if (confirmApproval) {
+              if (dryRun) {
+                console.log('🔍 [DRY RUN] Would approve this PR');
+              } else {
+                try {
+                  await this.githubCLI.approvePullRequest(
+                    pr.repository.owner.login,
+                    pr.repository.name,
+                    pr.number,
+                    editedApproval
+                  );
+                  console.log('✅ Approved!');
+                } catch (error) {
+                  console.error('❌ Failed to approve PR:', error);
+                }
+              }
+            }
+          } else {
+            console.log('❌ Approval message editing cancelled');
+          }
+        } else if (approvalAction === 'approve') {
           if (dryRun) {
             console.log('🔍 [DRY RUN] Would approve this PR');
           } else {
             try {
-              const comment = aiResult.approvalMessage || 'LGTM! 👍';
               await this.githubCLI.approvePullRequest(
                 pr.repository.owner.login,
                 pr.repository.name,
                 pr.number,
-                comment
+                approvalMessage
               );
               console.log('✅ Approved!');
             } catch (error) {
@@ -357,19 +457,42 @@ export class ReviewService {
     console.log(`💬 Comment: ${comment.content}`);
     console.log(`📄 Context:\n${comment.context}`);
     
-    const shouldPost = await this.askYesNo('Post this comment? (y/n): ');
-    if (shouldPost) {
-      if (dryRun) {
-        console.log('🔍 [DRY RUN] Would post comment');
-      } else {
-        try {
-          // For now, we'll post as a general comment since GitHub CLI doesn't support line-specific comments easily
-          const fullComment = `**${comment.path}:${comment.line}**\n\n${comment.content}\n\n\`\`\`\n${comment.context}\n\`\`\``;
-          await this.githubCLI.postComment(pr.repository.owner.login, pr.repository.name, pr.number, fullComment);
-          console.log('✅ Comment posted!');
-        } catch (error) {
-          console.error('❌ Failed to post comment:', error);
+    const action = await this.askCommentAction();
+    
+    if (action === 'edit') {
+      const editedComment = await this.editCommentInNvim(comment);
+      if (editedComment) {
+        comment = editedComment;
+        console.log(`\n📁 File: ${comment.path}`);
+        console.log(`📍 Line: ${comment.line}`);
+        console.log(`💬 Comment: ${comment.content}`);
+        console.log(`📄 Context:\n${comment.context}`);
+        
+        const shouldPost = await this.askYesNo('Post this edited comment? (y/n): ');
+        if (!shouldPost) {
+          return;
         }
+      } else {
+        console.log('❌ Comment editing cancelled');
+        return;
+      }
+    } else if (action === 'post') {
+      // Continue with posting
+    } else {
+      // Skip posting
+      return;
+    }
+    
+    if (dryRun) {
+      console.log('🔍 [DRY RUN] Would post comment');
+    } else {
+      try {
+        // For now, we'll post as a general comment since GitHub CLI doesn't support line-specific comments easily
+        const fullComment = `**${comment.path}:${comment.line}**\n\n${comment.content}\n\n\`\`\`\n${comment.context}\n\`\`\``;
+        await this.githubCLI.postComment(pr.repository.owner.login, pr.repository.name, pr.number, fullComment);
+        console.log('✅ Comment posted!');
+      } catch (error) {
+        console.error('❌ Failed to post comment:', error);
       }
     }
   }
@@ -382,11 +505,281 @@ export class ReviewService {
 
     return new Promise((resolve) => {
       rl.question(question, (answer) => {
-        const response = answer.toLowerCase().trim();
+        // Clean the input by removing terminal escape sequences and non-printable characters
+        const cleanAnswer = answer
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // Remove ANSI escape sequences
+          .replace(/[^\x20-\x7E]/g, '') // Remove non-printable characters
+          .toLowerCase()
+          .trim();
+        
+        // Debug: log the original and cleaned input
+        if (answer !== cleanAnswer) {
+          console.log(`🔧 Input cleaned: "${answer}" -> "${cleanAnswer}"`);
+        }
+        
         rl.close();
-        resolve(response === 'y' || response === 'yes');
+        resolve(cleanAnswer === 'y' || cleanAnswer === 'yes');
       });
     });
+  }
+
+  private async askCommentAction(): Promise<'post' | 'edit' | 'skip'> {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question('What would you like to do? (p)ost, (e)dit, (s)kip: ', (answer) => {
+        // Clean the input by removing terminal escape sequences and non-printable characters
+        const cleanAnswer = answer
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // Remove ANSI escape sequences
+          .replace(/[^\x20-\x7E]/g, '') // Remove non-printable characters
+          .toLowerCase()
+          .trim();
+        
+        // Debug: log the original and cleaned input
+        if (answer !== cleanAnswer) {
+          console.log(`🔧 Input cleaned: "${answer}" -> "${cleanAnswer}"`);
+        }
+        
+        rl.close();
+        
+        if (cleanAnswer === 'e' || cleanAnswer === 'edit') {
+          resolve('edit');
+        } else if (cleanAnswer === 'p' || cleanAnswer === 'post') {
+          resolve('post');
+        } else {
+          resolve('skip');
+        }
+      });
+    });
+  }
+
+  private async askApprovalAction(): Promise<'approve' | 'edit' | 'skip'> {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question('What would you like to do? (a)pprove, (e)dit, (s)kip: ', (answer) => {
+        // Clean the input by removing terminal escape sequences and non-printable characters
+        const cleanAnswer = answer
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // Remove ANSI escape sequences
+          .replace(/[^\x20-\x7E]/g, '') // Remove non-printable characters
+          .toLowerCase()
+          .trim();
+        
+        // Debug: log the original and cleaned input
+        if (answer !== cleanAnswer) {
+          console.log(`🔧 Input cleaned: "${answer}" -> "${cleanAnswer}"`);
+        }
+        
+        rl.close();
+        
+        if (cleanAnswer === 'e' || cleanAnswer === 'edit') {
+          resolve('edit');
+        } else if (cleanAnswer === 'a' || cleanAnswer === 'approve') {
+          resolve('approve');
+        } else {
+          resolve('skip');
+        }
+      });
+    });
+  }
+
+  private async editCommentInNvim(comment: AIComment): Promise<AIComment | null> {
+    const tempDir = path.join(process.cwd(), '.temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const tempFile = path.join(tempDir, `comment_${Date.now()}.txt`);
+    
+    // Create the comment file with a specific format for editing
+    const commentContent = `# Edit this comment
+# Lines starting with # are comments and will be ignored
+# The format is:
+# FILE_PATH:LINE_NUMBER
+# COMMENT_CONTENT
+# CONTEXT
+
+FILE_PATH:${comment.path}
+LINE_NUMBER:${comment.line}
+
+COMMENT_CONTENT:
+${comment.content}
+
+CONTEXT:
+${comment.context}
+`;
+
+    try {
+      fs.writeFileSync(tempFile, commentContent, 'utf8');
+      
+      // Launch nvim
+      const nvimProcess = spawn('nvim', [tempFile], {
+        stdio: 'inherit'
+      });
+
+      return new Promise((resolve) => {
+        nvimProcess.on('close', (code) => {
+          if (code === 0) {
+            // Read the edited file
+            const editedContent = fs.readFileSync(tempFile, 'utf8');
+            const parsedComment = this.parseEditedComment(editedContent);
+            
+            // Clean up temp file
+            fs.unlinkSync(tempFile);
+            
+            if (parsedComment) {
+              resolve(parsedComment);
+            } else {
+              console.log('❌ Failed to parse edited comment');
+              resolve(null);
+            }
+          } else {
+            console.log('❌ nvim exited with error');
+            fs.unlinkSync(tempFile);
+            resolve(null);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Failed to edit comment:', error);
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      return null;
+    }
+  }
+
+  private parseEditedComment(content: string): AIComment | null {
+    const lines = content.split('\n');
+    let filePath = '';
+    let lineNumber = 0;
+    let commentContent = '';
+    let context = '';
+    let inCommentSection = false;
+    let inContextSection = false;
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // Skip comment lines
+      if (trimmedLine.startsWith('#')) {
+        continue;
+      }
+      
+      if (trimmedLine.startsWith('FILE_PATH:')) {
+        filePath = trimmedLine.substring('FILE_PATH:'.length).trim();
+      } else if (trimmedLine.startsWith('LINE_NUMBER:')) {
+        lineNumber = parseInt(trimmedLine.substring('LINE_NUMBER:'.length).trim(), 10);
+      } else if (trimmedLine === 'COMMENT_CONTENT:') {
+        inCommentSection = true;
+        inContextSection = false;
+      } else if (trimmedLine === 'CONTEXT:') {
+        inCommentSection = false;
+        inContextSection = true;
+      } else if (inCommentSection && trimmedLine !== '') {
+        commentContent += (commentContent ? '\n' : '') + line;
+      } else if (inContextSection && trimmedLine !== '') {
+        context += (context ? '\n' : '') + line;
+      }
+    }
+
+    if (filePath && lineNumber && commentContent.trim()) {
+      return {
+        path: filePath,
+        line: lineNumber,
+        content: commentContent.trim(),
+        context: context.trim()
+      };
+    }
+
+    return null;
+  }
+
+  private async editApprovalCommentInNvim(approvalMessage: string): Promise<string | null> {
+    const tempDir = path.join(process.cwd(), '.temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const tempFile = path.join(tempDir, `approval_${Date.now()}.txt`);
+    
+    // Create the approval comment file with a specific format for editing
+    const approvalContent = `# Edit this approval comment
+# Lines starting with # are comments and will be ignored
+# The format is:
+# APPROVAL_MESSAGE: Your approval message here
+
+APPROVAL_MESSAGE:
+${approvalMessage}
+`;
+
+    try {
+      fs.writeFileSync(tempFile, approvalContent, 'utf8');
+      
+      // Launch nvim
+      const nvimProcess = spawn('nvim', [tempFile], {
+        stdio: 'inherit'
+      });
+
+      return new Promise((resolve) => {
+        nvimProcess.on('close', (code) => {
+          if (code === 0) {
+            // Read the edited file
+            const editedContent = fs.readFileSync(tempFile, 'utf8');
+            const parsedApproval = this.parseEditedApprovalComment(editedContent);
+            
+            // Clean up temp file
+            fs.unlinkSync(tempFile);
+            
+            if (parsedApproval) {
+              resolve(parsedApproval);
+            } else {
+              console.log('❌ Failed to parse edited approval comment');
+              resolve(null);
+            }
+          } else {
+            console.log('❌ nvim exited with error');
+            fs.unlinkSync(tempFile);
+            resolve(null);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Failed to edit approval comment:', error);
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      return null;
+    }
+  }
+
+  private parseEditedApprovalComment(content: string): string | null {
+    const lines = content.split('\n');
+    let approvalMessage = '';
+    let inApprovalSection = false;
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      // Skip comment lines
+      if (trimmedLine.startsWith('#')) {
+        continue;
+      }
+      
+      if (trimmedLine === 'APPROVAL_MESSAGE:') {
+        inApprovalSection = true;
+      } else if (inApprovalSection && trimmedLine !== '') {
+        approvalMessage += (approvalMessage ? '\n' : '') + line;
+      }
+    }
+
+    return approvalMessage.trim() || null;
   }
 
 }
