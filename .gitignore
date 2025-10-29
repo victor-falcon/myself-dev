@@ -40,3 +40,4 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
+.ignored-prs.json
