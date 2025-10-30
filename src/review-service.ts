@@ -636,32 +636,50 @@ ${comment.context}
     try {
       fs.writeFileSync(tempFile, commentContent, 'utf8');
       
-      // Launch nvim
+      // Launch nvim with proper terminal handling
       const nvimProcess = spawn('nvim', [tempFile], {
-        stdio: 'inherit'
+        stdio: ['inherit', 'inherit', 'inherit'],
+        detached: false,
+        shell: false
       });
 
       return new Promise((resolve) => {
         nvimProcess.on('close', (code) => {
-          if (code === 0) {
-            // Read the edited file
-            const editedContent = fs.readFileSync(tempFile, 'utf8');
-            const parsedComment = this.parseEditedComment(editedContent);
+          // Small delay to ensure terminal is properly restored
+          setTimeout(() => {
+            // Force terminal cleanup and restoration
+            process.stdout.write('\x1b[?25h'); // Show cursor
+            process.stdout.write('\x1b[0m'); // Reset terminal attributes
             
-            // Clean up temp file
-            fs.unlinkSync(tempFile);
-            
-            if (parsedComment) {
-              resolve(parsedComment);
+            if (code === 0) {
+              // Read the edited file
+              const editedContent = fs.readFileSync(tempFile, 'utf8');
+              const parsedComment = this.parseEditedComment(editedContent);
+              
+              // Clean up temp file
+              fs.unlinkSync(tempFile);
+              
+              if (parsedComment) {
+                resolve(parsedComment);
+              } else {
+                console.log('❌ Failed to parse edited comment');
+                resolve(null);
+              }
             } else {
-              console.log('❌ Failed to parse edited comment');
+              console.log('❌ nvim exited with error');
+              fs.unlinkSync(tempFile);
               resolve(null);
             }
-          } else {
-            console.log('❌ nvim exited with error');
+          }, 100);
+        });
+
+        // Handle process errors
+        nvimProcess.on('error', (error) => {
+          console.error('❌ Failed to launch nvim:', error);
+          if (fs.existsSync(tempFile)) {
             fs.unlinkSync(tempFile);
-            resolve(null);
           }
+          resolve(null);
         });
       });
     } catch (error) {
@@ -740,32 +758,50 @@ ${approvalMessage}
     try {
       fs.writeFileSync(tempFile, approvalContent, 'utf8');
       
-      // Launch nvim
+      // Launch nvim with proper terminal handling
       const nvimProcess = spawn('nvim', [tempFile], {
-        stdio: 'inherit'
+        stdio: ['inherit', 'inherit', 'inherit'],
+        detached: false,
+        shell: false
       });
 
       return new Promise((resolve) => {
         nvimProcess.on('close', (code) => {
-          if (code === 0) {
-            // Read the edited file
-            const editedContent = fs.readFileSync(tempFile, 'utf8');
-            const parsedApproval = this.parseEditedApprovalComment(editedContent);
+          // Small delay to ensure terminal is properly restored
+          setTimeout(() => {
+            // Force terminal cleanup and restoration
+            process.stdout.write('\x1b[?25h'); // Show cursor
+            process.stdout.write('\x1b[0m'); // Reset terminal attributes
             
-            // Clean up temp file
-            fs.unlinkSync(tempFile);
-            
-            if (parsedApproval) {
-              resolve(parsedApproval);
+            if (code === 0) {
+              // Read the edited file
+              const editedContent = fs.readFileSync(tempFile, 'utf8');
+              const parsedApproval = this.parseEditedApprovalComment(editedContent);
+              
+              // Clean up temp file
+              fs.unlinkSync(tempFile);
+              
+              if (parsedApproval) {
+                resolve(parsedApproval);
+              } else {
+                console.log('❌ Failed to parse edited approval comment');
+                resolve(null);
+              }
             } else {
-              console.log('❌ Failed to parse edited approval comment');
+              console.log('❌ nvim exited with error');
+              fs.unlinkSync(tempFile);
               resolve(null);
             }
-          } else {
-            console.log('❌ nvim exited with error');
+          }, 100);
+        });
+
+        // Handle process errors
+        nvimProcess.on('error', (error) => {
+          console.error('❌ Failed to launch nvim:', error);
+          if (fs.existsSync(tempFile)) {
             fs.unlinkSync(tempFile);
-            resolve(null);
           }
+          resolve(null);
         });
       });
     } catch (error) {
