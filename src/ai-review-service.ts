@@ -55,8 +55,18 @@ Guidelines:
 - Use "approve_with_comments" for good changes that have minor improvements
 - Use "comment_only" for changes that need fixes before approval
 - Focus on bugs, typos, security issues, performance problems, code quality
-- Write comments in a human tone. Use single, direct, and clear comments. Keep them conciese, a single phrase or question.
 - Don't comment on style preferences unless they're significant issues
+
+Comments format:
+- Write comments on a human tone.
+- Keep comments concise and to the point. A short comment is more likely to be read and acted upon.
+- User friendly language, use abbreviations like "LGTM", "WDY", etc.
+- 200 character limit per comment.
+
+Comments examples:
+- If a property is missed or empty, just say: "We shoudl set sometthing here" or "We need to add xx prop"
+- If a function is too complex, say: "This function seems a bit complex, consider breaking it down for better readability."
+
 `;
 
     try {
