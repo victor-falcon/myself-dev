@@ -240,13 +240,46 @@ export class GitHubCLI {
     }
   }
 
+  async getPullRequestLatestCommit(owner: string, repo: string, prNumber: number): Promise<string> {
+    try {
+      const pr = await this.executeCommand(`gh pr view ${prNumber} --repo ${owner}/${repo} --json headRefOid`);
+      if (!pr || !pr.headRefOid) {
+        throw new Error('Could not get commit SHA from PR');
+      }
+      return pr.headRefOid;
+    } catch (error) {
+      console.error(`❌ Failed to get latest commit for PR #${prNumber}:`, error);
+      throw error;
+    }
+  }
+
   async postComment(owner: string, repo: string, prNumber: number, comment: string): Promise<void> {
     try {
       // Escape the comment for shell execution
       const escapedComment = comment.replace(/"/g, '\\"');
-      await this.executeCommand(`gh pr comment ${prNumber} --repo ${owner}/${repo} --body "${escapedComment}"`);
+      execSync(`gh pr comment ${prNumber} --repo ${owner}/${repo} --body "${escapedComment}"`, { 
+        encoding: 'utf8',
+        stdio: 'pipe'
+      });
     } catch (error) {
       console.error(`❌ Failed to post comment on PR #${prNumber}:`, error);
+      throw error;
+    }
+  }
+
+  async postLineComment(owner: string, repo: string, prNumber: number, filePath: string, line: number, comment: string, commitSha: string): Promise<void> {
+    try {
+      // Escape the comment for JSON
+      const escapedComment = comment.replace(/\"/g, '\\"');
+      
+      const command = `gh api --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/${owner}/${repo}/pulls/${prNumber}/comments -f body="${escapedComment}" -f commit_id="${commitSha}" -f path="${filePath}" -f line=${line} -f side="RIGHT"`;
+      
+      execSync(command, { 
+        encoding: 'utf8',
+        stdio: 'pipe'
+      });
+    } catch (error) {
+      console.error(`❌ Failed to post line comment on PR #${prNumber}:`, error);
       throw error;
     }
   }

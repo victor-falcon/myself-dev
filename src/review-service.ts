@@ -452,10 +452,10 @@ export class ReviewService {
   }
 
   private async showAndPostComment(pr: PullRequest, comment: AIComment, dryRun: boolean): Promise<void> {
-    console.log(`\n📁 File: ${comment.path}`);
-    console.log(`📍 Line: ${comment.line}`);
-    console.log(`💬 Comment: ${comment.content}`);
-    console.log(`📄 Context:\n${comment.context}`);
+    console.log(`\\n?? File: ${comment.path}`);
+    console.log(`?? Line: ${comment.line}`);
+    console.log(`?? Comment: ${comment.content}`);
+    console.log(`?? Context:\\n${comment.context}`);
     
     const action = await this.askCommentAction();
     
@@ -463,17 +463,17 @@ export class ReviewService {
       const editedComment = await this.editCommentInNvim(comment);
       if (editedComment) {
         comment = editedComment;
-        console.log(`\n📁 File: ${comment.path}`);
-        console.log(`📍 Line: ${comment.line}`);
-        console.log(`💬 Comment: ${comment.content}`);
-        console.log(`📄 Context:\n${comment.context}`);
+        console.log(`\\n?? File: ${comment.path}`);
+        console.log(`?? Line: ${comment.line}`);
+        console.log(`?? Comment: ${comment.content}`);
+        console.log(`?? Context:\\n${comment.context}`);
         
         const shouldPost = await this.askYesNo('Post this edited comment? (y/n): ');
         if (!shouldPost) {
           return;
         }
       } else {
-        console.log('❌ Comment editing cancelled');
+        console.log('? Comment editing cancelled');
         return;
       }
     } else if (action === 'post') {
@@ -484,19 +484,37 @@ export class ReviewService {
     }
     
     if (dryRun) {
-      console.log('🔍 [DRY RUN] Would post comment');
+      console.log('?? [DRY RUN] Would post line-specific comment');
     } else {
       try {
-        // For now, we'll post as a general comment since GitHub CLI doesn't support line-specific comments easily
-        const fullComment = `**${comment.path}:${comment.line}**\n\n${comment.content}\n\n\`\`\`\n${comment.context}\n\`\`\``;
-        await this.githubCLI.postComment(pr.repository.owner.login, pr.repository.name, pr.number, fullComment);
-        console.log('✅ Comment posted!');
+        // Get the latest commit SHA for the PR
+        const [owner, repo] = this.repository.split('/');
+        const commitSha = await this.githubCLI.getPullRequestLatestCommit(owner, repo, pr.number);
+        
+        // Post as a line-specific comment
+        await this.githubCLI.postLineComment(
+          pr.repository.owner.login, 
+          pr.repository.name, 
+          pr.number, 
+          comment.path, 
+          comment.line, 
+          comment.content, 
+          commitSha
+        );
+        console.log('? Line comment posted!');
       } catch (error) {
-        console.error('❌ Failed to post comment:', error);
+        console.error('? Failed to post line comment:', error);
+        // Fallback to general comment if line comment fails
+        try {
+          const fullComment = `**${comment.path}:${comment.line}**\n\n${comment.content}\n\n\`\`\`\n${comment.context}\n\`\`\``;
+          await this.githubCLI.postComment(pr.repository.owner.login, pr.repository.name, pr.number, fullComment);
+          console.log('? Fallback comment posted!');
+        } catch (fallbackError) {
+          console.error('? Failed to post fallback comment:', fallbackError);
+        }
       }
     }
   }
-
   private async askYesNo(question: string): Promise<boolean> {
     const rl = readline.createInterface({
       input: process.stdin,
