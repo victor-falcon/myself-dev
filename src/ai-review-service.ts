@@ -214,8 +214,9 @@ Guidelines:
 Comments format:
 - Write comments on a human tone.
 - Keep comments concise and to the point. A short comment is more likely to be read and acted upon.
+- Comments are read be expert devs, avoid over-explaining.
 - User friendly language, use abbreviations like "LGTM", "WDY", etc.
-- 200 character limit per comment.
+- 150 character limit per comment.
 
 Comments examples:
 - If a property is missed or empty, just say: "We shoudl set sometthing here" or "We need to add xx prop"
