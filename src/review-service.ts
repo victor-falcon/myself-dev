@@ -44,6 +44,125 @@ export class ReviewService {
     console.log(`Initialized for user: ${this.username}`);
   }
 
+  async reviewSpecificPR(prNumber: number, dryRun: boolean = false): Promise<void> {
+    console.log(`🔍 Fetching PR #${prNumber} from repository...\n`);
+
+    const [owner, repo] = this.repository.split('/');
+    
+    const pr = await this.githubCLI.getPullRequestByNumber(owner, repo, prNumber);
+    
+    if (!pr) {
+      console.error(`❌ PR #${prNumber} not found in ${this.repository}`);
+      return;
+    }
+
+    if (pr.state !== 'open') {
+      console.log(`⚠️  PR #${prNumber} is ${pr.state}, not open`);
+      return;
+    }
+
+    console.log(`📋 ${this.prReviewer.getPRSummary(pr)}`);
+    console.log(`🔗 ${pr.html_url}`);
+
+    const isSimple = this.prReviewer.isSimplePR(pr);
+    if (isSimple) {
+      console.log('✅ This PR looks simple');
+    } else {
+      console.log('⚠️  This PR is large or complex');
+    }
+
+    if (this.aiReviewService) {
+      console.log('🤖 Auto-triggering AI review...\n');
+      await this.handleAIReview(pr, dryRun);
+    } else {
+      console.log('⚠️  AI review not available - GEMINI_API_KEY not found');
+      console.log('📝 Falling back to manual review options\n');
+      
+      let actionComplete = false;
+      
+      while (!actionComplete) {
+        const action = await this.askUserAction(pr, dryRun);
+        
+        switch (action) {
+          case 'a':
+            const approvalComment = this.prReviewer.getApprovalComment(pr);
+            console.log(`💬 Approval comment: ${approvalComment}`);
+            
+            const approvalAction = await this.askApprovalAction();
+            
+            if (approvalAction === 'edit') {
+              const editedApproval = await this.editApprovalCommentInNvim(approvalComment);
+              if (editedApproval) {
+                console.log(`💬 Edited approval comment: ${editedApproval}`);
+                const confirmApproval = await this.askYesNo('Approve with this edited comment? (y/n): ');
+                if (!confirmApproval) {
+                  break;
+                }
+                
+                if (dryRun) {
+                  console.log('🔍 [DRY RUN] Would approve this PR');
+                } else {
+                  try {
+                    await this.githubCLI.approvePullRequest(
+                      pr.repository.owner.login,
+                      pr.repository.name,
+                      pr.number,
+                      editedApproval
+                    );
+                    console.log('✅ Approved!');
+                  } catch (error) {
+                    console.error('❌ Failed to approve PR:', error);
+                  }
+                }
+              } else {
+                console.log('❌ Approval comment editing cancelled');
+                break;
+              }
+            } else if (approvalAction === 'approve') {
+              if (dryRun) {
+                console.log('🔍 [DRY RUN] Would approve this PR');
+              } else {
+                try {
+                  await this.githubCLI.approvePullRequest(
+                    pr.repository.owner.login,
+                    pr.repository.name,
+                    pr.number,
+                    approvalComment
+                  );
+                  console.log('✅ Approved!');
+                } catch (error) {
+                  console.error('❌ Failed to approve PR:', error);
+                }
+              }
+            } else {
+              console.log('⏭️  Skipped approval');
+              break;
+            }
+            actionComplete = true;
+            break;
+          case 'o':
+            console.log(`🔗 Opening ${pr.html_url} in browser...`);
+            if (!dryRun) {
+              const { exec } = require('child_process');
+              exec(`open "${pr.html_url}"`);
+            } else {
+              console.log('🔍 [DRY RUN] Would open browser');
+            }
+            break;
+          case 's':
+            console.log('⏭️  Skipped');
+            actionComplete = true;
+            break;
+          case 'i':
+            console.log('🚫 Ignored (will not be shown again)');
+            this.addIgnoredPR(pr.number);
+            actionComplete = true;
+            break;
+        }
+      }
+    }
+  }
+
   async reviewPendingPRs(dryRun: boolean = false): Promise<void> {
     console.log('🔍 Fetching PRs from repository...\n');
 
@@ -74,30 +193,54 @@ export class ReviewService {
         console.log('⚠️  This PR is large or complex');
       }
 
-      const action = await this.askUserAction(pr, dryRun);
+      let actionComplete = false;
       
-      // Handle AI review if requested
-      if (action === 'ai' && this.aiReviewService) {
-        await this.handleAIReview(pr, dryRun);
-        continue;
-      }
-      
-      switch (action) {
-        case 'a':
-          const approvalComment = this.prReviewer.getApprovalComment(pr);
-          console.log(`💬 Approval comment: ${approvalComment}`);
-          
-          const approvalAction = await this.askApprovalAction();
-          
-          if (approvalAction === 'edit') {
-            const editedApproval = await this.editApprovalCommentInNvim(approvalComment);
-            if (editedApproval) {
-              console.log(`💬 Edited approval comment: ${editedApproval}`);
-              const confirmApproval = await this.askYesNo('Approve with this edited comment? (y/n): ');
-              if (!confirmApproval) {
+      while (!actionComplete) {
+        const action = await this.askUserAction(pr, dryRun);
+        
+        // Handle AI review if requested
+        if (action === 'ai' && this.aiReviewService) {
+          await this.handleAIReview(pr, dryRun);
+          actionComplete = true;
+          continue;
+        }
+        
+        switch (action) {
+          case 'a':
+            const approvalComment = this.prReviewer.getApprovalComment(pr);
+            console.log(`💬 Approval comment: ${approvalComment}`);
+            
+            const approvalAction = await this.askApprovalAction();
+            
+            if (approvalAction === 'edit') {
+              const editedApproval = await this.editApprovalCommentInNvim(approvalComment);
+              if (editedApproval) {
+                console.log(`💬 Edited approval comment: ${editedApproval}`);
+                const confirmApproval = await this.askYesNo('Approve with this edited comment? (y/n): ');
+                if (!confirmApproval) {
+                  break;
+                }
+                
+                if (dryRun) {
+                  console.log('🔍 [DRY RUN] Would approve this PR');
+                } else {
+                  try {
+                    await this.githubCLI.approvePullRequest(
+                      pr.repository.owner.login,
+                      pr.repository.name,
+                      pr.number,
+                      editedApproval
+                    );
+                    console.log('✅ Approved!');
+                  } catch (error) {
+                    console.error('❌ Failed to approve PR:', error);
+                  }
+                }
+              } else {
+                console.log('❌ Approval comment editing cancelled');
                 break;
               }
-              
+            } else if (approvalAction === 'approve') {
               if (dryRun) {
                 console.log('🔍 [DRY RUN] Would approve this PR');
               } else {
@@ -106,7 +249,7 @@ export class ReviewService {
                     pr.repository.owner.login,
                     pr.repository.name,
                     pr.number,
-                    editedApproval
+                    approvalComment
                   );
                   console.log('✅ Approved!');
                 } catch (error) {
@@ -114,50 +257,34 @@ export class ReviewService {
                 }
               }
             } else {
-              console.log('❌ Approval comment editing cancelled');
+              console.log('⏭️  Skipped approval');
               break;
             }
-          } else if (approvalAction === 'approve') {
-            if (dryRun) {
-              console.log('🔍 [DRY RUN] Would approve this PR');
-            } else {
-              try {
-                await this.githubCLI.approvePullRequest(
-                  pr.repository.owner.login,
-                  pr.repository.name,
-                  pr.number,
-                  approvalComment
-                );
-                console.log('✅ Approved!');
-              } catch (error) {
-                console.error('❌ Failed to approve PR:', error);
-              }
-            }
-          } else {
-            console.log('⏭️  Skipped approval');
+            approvedCount++;
+            actionComplete = true;
             break;
-          }
-          approvedCount++;
-          break;
-        case 'o':
-          console.log(`🔗 Opening ${pr.html_url} in browser...`);
-          if (!dryRun) {
-            const { exec } = require('child_process');
-            exec(`open "${pr.html_url}"`);
-          } else {
-            console.log('🔍 [DRY RUN] Would open browser');
-          }
-          openedCount++;
-          break;
-        case 's':
-          console.log('⏭️  Skipped');
-          skippedCount++;
-          break;
-        case 'i':
-          console.log('🚫 Ignored (will not be shown again)');
-          this.addIgnoredPR(pr.number);
-          ignoredCount++;
-          break;
+          case 'o':
+            console.log(`🔗 Opening ${pr.html_url} in browser...`);
+            if (!dryRun) {
+              const { exec } = require('child_process');
+              exec(`open "${pr.html_url}"`);
+            } else {
+              console.log('🔍 [DRY RUN] Would open browser');
+            }
+            openedCount++;
+            break;
+          case 's':
+            console.log('⏭️  Skipped');
+            skippedCount++;
+            actionComplete = true;
+            break;
+          case 'i':
+            console.log('🚫 Ignored (will not be shown again)');
+            this.addIgnoredPR(pr.number);
+            ignoredCount++;
+            actionComplete = true;
+            break;
+        }
       }
     }
 
@@ -377,25 +504,51 @@ export class ReviewService {
           console.log(`💬 Approval message: ${aiResult.approvalMessage}`);
         }
         
-        // Show comments first
-        if (aiResult.comments.length > 0) {
-          console.log('\n📝 AI Comments:');
-          for (const comment of aiResult.comments) {
-            await this.showAndPostComment(pr, comment, dryRun);
-          }
-        }
-        
-        const approvalMessage = aiResult.approvalMessage || 'LGTM! 👍';
-        console.log(`💬 Approval message: ${approvalMessage}`);
-        
-        const approvalAction = await this.askApprovalAction();
-        
-        if (approvalAction === 'edit') {
-          const editedApproval = await this.editApprovalCommentInNvim(approvalMessage);
-          if (editedApproval) {
-            console.log(`💬 Edited approval message: ${editedApproval}`);
-            const confirmApproval = await this.askYesNo('Approve with this edited message? (y/n): ');
-            if (confirmApproval) {
+        // Determine if comments are file-specific or just a single PR-level comment
+        const hasFileComments = (aiResult.comments || []).some(c => c.path && c.path !== 'unknown' && c.line && c.line > 0);
+        const isSinglePRLevelComment = (aiResult.comments || []).length === 1 && (!aiResult.comments[0].path || aiResult.comments[0].path === 'unknown' || !aiResult.comments[0].line || aiResult.comments[0].line === 0);
+
+        if (hasFileComments && !isSinglePRLevelComment) {
+          // Print all comments grouped by file with context, then offer (o)pen, (a)pprove, (s)kip
+          this.printCommentsGroupedByFile(aiResult.comments);
+
+          const action = await this.askOpenApproveSkip();
+          if (action === 'open') {
+            console.log(`🔗 Opening ${pr.html_url} in browser...`);
+            if (!dryRun) {
+              const { exec } = require('child_process');
+              exec(`open "${pr.html_url}"`);
+            } else {
+              console.log('🔍 [DRY RUN] Would open browser');
+            }
+          } else if (action === 'approve') {
+            const approvalMessage = aiResult.approvalMessage || 'LGTM! 👍';
+            const approvalAction = await this.askApprovalAction();
+            if (approvalAction === 'edit') {
+              const editedApproval = await this.editApprovalCommentInNvim(approvalMessage);
+              if (editedApproval) {
+                const confirmApproval = await this.askYesNo('Approve with this edited message? (y/n): ');
+                if (confirmApproval) {
+                  if (dryRun) {
+                    console.log('🔍 [DRY RUN] Would approve this PR');
+                  } else {
+                    try {
+                      await this.githubCLI.approvePullRequest(
+                        pr.repository.owner.login,
+                        pr.repository.name,
+                        pr.number,
+                        editedApproval
+                      );
+                      console.log('✅ Approved!');
+                    } catch (error) {
+                      console.error('❌ Failed to approve PR:', error);
+                    }
+                  }
+                }
+              } else {
+                console.log('❌ Approval message editing cancelled');
+              }
+            } else if (approvalAction === 'approve') {
               if (dryRun) {
                 console.log('🔍 [DRY RUN] Would approve this PR');
               } else {
@@ -404,7 +557,7 @@ export class ReviewService {
                     pr.repository.owner.login,
                     pr.repository.name,
                     pr.number,
-                    editedApproval
+                    approvalMessage
                   );
                   console.log('✅ Approved!');
                 } catch (error) {
@@ -413,29 +566,99 @@ export class ReviewService {
               }
             }
           } else {
-            console.log('❌ Approval message editing cancelled');
+            console.log('⏭️  Skipped');
           }
-        } else if (approvalAction === 'approve') {
-          if (dryRun) {
-            console.log('🔍 [DRY RUN] Would approve this PR');
-          } else {
-            try {
-              await this.githubCLI.approvePullRequest(
-                pr.repository.owner.login,
-                pr.repository.name,
-                pr.number,
-                approvalMessage
-              );
-              console.log('✅ Approved!');
-            } catch (error) {
-              console.error('❌ Failed to approve PR:', error);
+        } else {
+          // Keep existing behavior (single PR-level comment or no file comments)
+          // Show comments first
+          if (aiResult.comments.length > 0) {
+            console.log('\n📝 AI Comments:');
+            for (const comment of aiResult.comments) {
+              await this.showAndPostComment(pr, comment, dryRun);
+            }
+          }
+          const approvalMessage = aiResult.approvalMessage || 'LGTM! 👍';
+          console.log(`💬 Approval message: ${approvalMessage}`);
+          const approvalAction = await this.askApprovalAction();
+          if (approvalAction === 'edit') {
+            const editedApproval = await this.editApprovalCommentInNvim(approvalMessage);
+            if (editedApproval) {
+              console.log(`💬 Edited approval message: ${editedApproval}`);
+              const confirmApproval = await this.askYesNo('Approve with this edited message? (y/n): ');
+              if (confirmApproval) {
+                if (dryRun) {
+                  console.log('🔍 [DRY RUN] Would approve this PR');
+                } else {
+                  try {
+                    await this.githubCLI.approvePullRequest(
+                      pr.repository.owner.login,
+                      pr.repository.name,
+                      pr.number,
+                      editedApproval
+                    );
+                    console.log('✅ Approved!');
+                  } catch (error) {
+                    console.error('❌ Failed to approve PR:', error);
+                  }
+                }
+              }
+            } else {
+              console.log('❌ Approval message editing cancelled');
+            }
+          } else if (approvalAction === 'approve') {
+            if (dryRun) {
+              console.log('🔍 [DRY RUN] Would approve this PR');
+            } else {
+              try {
+                await this.githubCLI.approvePullRequest(
+                  pr.repository.owner.login,
+                  pr.repository.name,
+                  pr.number,
+                  approvalMessage
+                );
+                console.log('✅ Approved!');
+              } catch (error) {
+                console.error('❌ Failed to approve PR:', error);
+              }
             }
           }
         }
       } else if (aiResult.action === 'comment_only') {
         console.log('⚠️  AI recommends comments only (no approval)');
         
-        if (aiResult.comments.length > 0) {
+        const hasFileComments = (aiResult.comments || []).some(c => c.path && c.path !== 'unknown' && c.line && c.line > 0);
+        if (hasFileComments) {
+          this.printCommentsGroupedByFile(aiResult.comments);
+          const action = await this.askOpenApproveSkip();
+          if (action === 'open') {
+            console.log(`🔗 Opening ${pr.html_url} in browser...`);
+            if (!dryRun) {
+              const { exec } = require('child_process');
+              exec(`open "${pr.html_url}"`);
+            } else {
+              console.log('🔍 [DRY RUN] Would open browser');
+            }
+          } else if (action === 'approve') {
+            const approvalMessage = 'LGTM! 👍';
+            if (dryRun) {
+              console.log('🔍 [DRY RUN] Would approve this PR');
+            } else {
+              try {
+                await this.githubCLI.approvePullRequest(
+                  pr.repository.owner.login,
+                  pr.repository.name,
+                  pr.number,
+                  approvalMessage
+                );
+                console.log('✅ Approved!');
+              } catch (error) {
+                console.error('❌ Failed to approve PR:', error);
+              }
+            }
+          } else {
+            console.log('⏭️  Skipped');
+          }
+        } else if (aiResult.comments.length > 0) {
           console.log('\n📝 AI Comments:');
           for (const comment of aiResult.comments) {
             await this.showAndPostComment(pr, comment, dryRun);
@@ -449,6 +672,53 @@ export class ReviewService {
       console.error('❌ AI review failed:', error);
       console.log('🔄 Falling back to manual review');
     }
+  }
+
+  private printCommentsGroupedByFile(comments: AIComment[]): void {
+    const grouped: Record<string, AIComment[]> = {};
+    for (const c of comments) {
+      const key = c.path || 'unknown';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(c);
+    }
+
+    console.log('\n📝 AI Comments by file:');
+    for (const [filePath, fileComments] of Object.entries(grouped)) {
+      console.log(`\n📄 ${filePath}`);
+      for (const c of fileComments) {
+        console.log(`  ▶️  Line ${c.line}: ${c.content}`);
+        if (c.context) {
+          console.log('  Context:\n' + c.context.split('\n').map(l => '    ' + l).join('\n'));
+        }
+      }
+    }
+  }
+
+  private async askOpenApproveSkip(): Promise<'open' | 'approve' | 'skip'> {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question('What do you want to do? (o)pen, (a)pprove, (s)kip: ', (answer) => {
+        const cleanAnswer = answer
+          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+          .replace(/[^\x20-\x7E]/g, '')
+          .toLowerCase()
+          .trim();
+
+        rl.close();
+
+        if (cleanAnswer === 'o' || cleanAnswer === 'open') {
+          resolve('open');
+        } else if (cleanAnswer === 'a' || cleanAnswer === 'approve') {
+          resolve('approve');
+        } else {
+          resolve('skip');
+        }
+      });
+    });
   }
 
   private async showAndPostComment(pr: PullRequest, comment: AIComment, dryRun: boolean): Promise<void> {

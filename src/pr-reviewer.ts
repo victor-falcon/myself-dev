@@ -27,7 +27,7 @@ export class PRReviewer {
 
   getPRSummary(pr: PullRequest): string {
     const totalChanges = pr.additions + pr.deletions;
-    return `PR #${pr.number}: "${pr.title}" - ${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} files changed (${totalChanges} total lines)`;
+    return `PR #${pr.number}: "${pr.title}" - ${pr.additions} additions, ${pr.deletions} deletions, ${pr.changed_files} files changed (${totalChanges} total lines) - Author: @${pr.user.login}`;
   }
 
   getApprovalComment(pr: PullRequest): string {

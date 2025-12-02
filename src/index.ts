@@ -50,6 +50,10 @@ program
     "Maximum total lines changed for auto-approval",
     "100",
   )
+  .option(
+    "-p, --pr <number>",
+    "Specific PR number to review (e.g., 82322)",
+  )
   .parse();
 
 const options = program.opts();
@@ -82,15 +86,22 @@ async function main() {
     console.log("🔍 Running in DRY RUN mode - no changes will be made");
   }
   console.log(`📦 Repository: ${options.repo}`);
+  if (options.pr) {
+    console.log(`🔢 Reviewing specific PR: #${options.pr}`);
+  }
   console.log(
     `📏 Review criteria: ${criteria.maxAdditions} additions, ${criteria.maxDeletions} deletions, ${criteria.maxChangedFiles} files, ${criteria.maxLinesChanged} total lines`,
   );
-  console.log(
-    `👥 Teams to filter by: ${teams.length > 0 ? teams.join(", ") : "none"}`,
-  );
-  console.log(
-    `👤 Users to filter by: ${users.length > 0 ? users.join(", ") : "none"}\n`,
-  );
+  if (!options.pr) {
+    console.log(
+      `👥 Teams to filter by: ${teams.length > 0 ? teams.join(", ") : "none"}`,
+    );
+    console.log(
+      `👤 Users to filter by: ${users.length > 0 ? users.join(", ") : "none"}\n`,
+    );
+  } else {
+    console.log();
+  }
 
   try {
     const reviewService = new ReviewService(
@@ -100,7 +111,17 @@ async function main() {
       criteria,
     );
     await reviewService.initialize();
-    await reviewService.reviewPendingPRs(options.dry);
+    
+    if (options.pr) {
+      const prNumber = parseInt(options.pr);
+      if (isNaN(prNumber)) {
+        console.error("❌ Error: PR number must be a valid number");
+        process.exit(1);
+      }
+      await reviewService.reviewSpecificPR(prNumber, options.dry);
+    } else {
+      await reviewService.reviewPendingPRs(options.dry);
+    }
   } catch (error) {
     console.error("❌ Error during review process:", error);
     process.exit(1);

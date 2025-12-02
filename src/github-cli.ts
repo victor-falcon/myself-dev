@@ -283,4 +283,43 @@ export class GitHubCLI {
       throw error;
     }
   }
+
+  async getPullRequestByNumber(owner: string, repo: string, prNumber: number): Promise<PullRequest | null> {
+    const pr = await this.executeCommand(`gh pr view ${prNumber} --repo ${owner}/${repo} --json number,title,body,url,author,createdAt,updatedAt,additions,deletions,changedFiles,isDraft,state,headRefName,baseRefName,headRepository,headRepositoryOwner`);
+    
+    if (!pr) {
+      return null;
+    }
+
+    return {
+      id: pr.number,
+      number: pr.number,
+      title: pr.title,
+      body: pr.body || '',
+      html_url: pr.url,
+      user: {
+        login: pr.author?.login || 'unknown',
+      },
+      created_at: pr.createdAt,
+      updated_at: pr.updatedAt,
+      additions: pr.additions || 0,
+      deletions: pr.deletions || 0,
+      changed_files: pr.changedFiles || 0,
+      draft: pr.isDraft || false,
+      state: pr.state.toLowerCase() as 'open' | 'closed',
+      head: {
+        ref: pr.headRefName,
+      },
+      base: {
+        ref: pr.baseRefName,
+      },
+      repository: {
+        name: pr.headRepository?.name || repo,
+        full_name: pr.headRepository?.nameWithOwner || `${owner}/${repo}`,
+        owner: {
+          login: pr.headRepositoryOwner?.login || owner,
+        },
+      },
+    };
+  }
 }
